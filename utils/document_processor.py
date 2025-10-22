@@ -11,6 +11,7 @@ import PyPDF2
 from docx import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document as LangChainDocument
+import re
 
 from config import CHUNK_SIZE, CHUNK_OVERLAP, SUPPORTED_FORMATS, MAX_FILE_SIZE_BYTES
 
@@ -49,6 +50,29 @@ class DocumentProcessor:
         
         return True, ""
     
+    def _clean_text(self, text: str) -> str:
+        """
+        Normalize whitespace and fix broken line wraps from PDF extraction.
+        - Collapse single newlines into spaces while preserving paragraph breaks
+        - Remove excessive spaces
+        - Fix hyphenated line breaks
+        """
+        if not text:
+            return ""
+        # Normalize line endings
+        text = text.replace("\r", "\n")
+        # Fix hyphenated line breaks: "exam-\nple" -> "example"
+        text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+        # Remove page markers that add noise
+        text = re.sub(r"\s*--- Page \d+ ---\s*", "\n", text)
+        # Replace single newlines (not part of a blank-line paragraph break) with spaces
+        text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+        # Collapse 3+ newlines to 2 (paragraph break)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        # Collapse repeated spaces
+        text = re.sub(r"[ \t]{2,}", " ", text)
+        return text.strip()
+
     def extract_text_from_pdf(self, file_bytes: bytes) -> tuple[str, Dict[str, Any]]:
         """
         Extract text from PDF file
@@ -75,6 +99,8 @@ class DocumentProcessor:
         except Exception as e:
             raise ValueError(f"Error extracting text from PDF: {str(e)}")
         
+        # Clean up broken formatting common in PDFs
+        text = self._clean_text(text)
         return text, metadata
     
     def extract_text_from_docx(self, file_bytes: bytes) -> tuple[str, Dict[str, Any]]:
@@ -105,6 +131,7 @@ class DocumentProcessor:
         except Exception as e:
             raise ValueError(f"Error extracting text from DOCX: {str(e)}")
         
+        text = self._clean_text(text)
         return text, metadata
     
     def extract_text_from_txt(self, file_bytes: bytes) -> tuple[str, Dict[str, Any]]:
@@ -130,6 +157,7 @@ class DocumentProcessor:
             except Exception as e:
                 raise ValueError(f"Error decoding text file: {str(e)}")
         
+        text = self._clean_text(text)
         return text, metadata
     
     def process_document(self, file_name: str, file_bytes: bytes) -> List[LangChainDocument]:

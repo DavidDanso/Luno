@@ -56,9 +56,14 @@ class QAChainManager:
             raise ValueError("Vector store is required to create QA chain")
         
         try:
-            # Create retriever from vector store
+            # Create retriever from vector store (MMR for diversity)
             retriever = vector_store.as_retriever(
-                search_kwargs={"k": TOP_K_RESULTS}
+                search_type="mmr",
+                search_kwargs={
+                    "k": TOP_K_RESULTS,
+                    "fetch_k": max(10, TOP_K_RESULTS * 3),
+                    "lambda_mult": 0.25,
+                },
             )
             
             # Create prompt template
@@ -72,7 +77,7 @@ class QAChainManager:
             self.retriever = retriever
             
             self.qa_chain = (
-                {"context": lambda x: format_docs(retriever.invoke(x)), "question": RunnablePassthrough()}
+                {"context": retriever | format_docs, "question": RunnablePassthrough()}
                 | prompt
                 | self.llm
                 | StrOutputParser()
@@ -90,13 +95,6 @@ class QAChainManager:
     ) -> Dict[str, Any]:
         """
         Ask a question and get an answer with source documents
-        
-        Args:
-            question: User's question
-            vector_store: ChromaDB vector store instance
-            
-        Returns:
-            Dictionary with 'answer' and 'source_documents'
         """
         if not question or not question.strip():
             raise ValueError("Question cannot be empty")
@@ -107,12 +105,35 @@ class QAChainManager:
         
         try:
             # Get relevant documents
-            source_docs = self.retriever.invoke(question)
+            source_docs = self.retriever.get_relevant_documents(question)
+            
+            # Heuristic extractive answer for goal/objective-style questions
+            lower_q = question.lower()
+            keywords = ["goal", "objective", "purpose", "aim", "mission"]
+            extractive = None
+            if any(k in lower_q for k in keywords):
+                snippets = []
+                for doc in source_docs:
+                    lines = [l.strip() for l in doc.page_content.split('\n') if l.strip()]
+                    for i, line in enumerate(lines):
+                        llow = line.lower()
+                        if any(k in llow for k in keywords):
+                            window = " ".join(lines[max(0, i-1):min(len(lines), i+3)])
+                            snippets.append(window)
+                if snippets:
+                    # Deduplicate and compact
+                    joined = " ".join(snippets)
+                    # Keep to ~350 chars
+                    extractive = (joined[:350] + "...") if len(joined) > 350 else joined
             
             # Query the chain
             answer = self.qa_chain.invoke(question)
+            answer = answer.strip()
             
-            # Format response
+            # Prefer extractive if available and concise
+            if extractive and (len(answer) < 10 or len(extractive) < len(answer) * 0.7):
+                answer = extractive
+            
             response = {
                 "answer": answer,
                 "source_documents": source_docs
@@ -161,29 +182,16 @@ class QAChainManager:
     
     def format_source_chunks(self, source_documents) -> str:
         """
-        Format source document chunks with metadata for display
-        
-        Args:
-            source_documents: List of source Document objects
-            
-        Returns:
-            Formatted string with document chunks
+        Compact chunk preview for debugging; prefer format_sources for UI.
         """
         if not source_documents:
             return "No source chunks available"
-        
-        chunks = []
+        lines = []
         for idx, doc in enumerate(source_documents, 1):
             source = doc.metadata.get("source", "Unknown")
             chunk_idx = doc.metadata.get("chunk_index", "?")
-            content = doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
-            
-            chunk_text = f"""
-**Source {idx}: {source}** (Chunk {chunk_idx})
-```
-{content}
-```
-"""
-            chunks.append(chunk_text.strip())
-        
-        return "\n\n".join(chunks)
+            preview = doc.page_content.replace("\n", " ")
+            if len(preview) > 180:
+                preview = preview[:180] + "..."
+            lines.append(f"• {source} (chunk {chunk_idx}): {preview}")
+        return "\n".join(lines)

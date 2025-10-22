@@ -260,7 +260,7 @@ def display_chat_interface():
             
             if chat['sources']:
                 with st.expander("📎 View Sources"):
-                    st.markdown(chat['sources'])
+                    st.markdown(f"<div class='source-citation'>{chat['sources']}</div>", unsafe_allow_html=True)
             
             st.markdown("---")
     
@@ -297,7 +297,7 @@ def display_chat_interface():
                 )
                 
                 # Format sources
-                sources = st.session_state.qa_manager.format_source_chunks(
+                sources = st.session_state.qa_manager.format_sources(
                     result['source_documents']
                 )
                 
