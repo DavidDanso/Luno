@@ -37,8 +37,7 @@ class QAChainManager:
             self.llm = ChatGoogleGenerativeAI(
                 model=GEMINI_MODEL,
                 google_api_key=self.api_key,
-                temperature=TEMPERATURE,
-                convert_system_message_to_human=True
+                temperature=TEMPERATURE
             )
         except Exception as e:
             raise Exception(f"Error initializing Gemini LLM: {str(e)}")
@@ -69,14 +68,15 @@ class QAChainManager:
             def format_docs(docs):
                 return "\n\n".join(doc.page_content for doc in docs)
             
+            # Store retriever for later use
+            self.retriever = retriever
+            
             self.qa_chain = (
-                {"context": retriever | format_docs, "question": RunnablePassthrough()}
+                {"context": lambda x: format_docs(retriever.invoke(x)), "question": RunnablePassthrough()}
                 | prompt
                 | self.llm
                 | StrOutputParser()
             )
-            
-            self.retriever = retriever
             
             return self.qa_chain
             

@@ -40,13 +40,11 @@ APP_TITLE = "Luno AI"
 APP_DESCRIPTION = "Upload documents and ask questions using AI-powered semantic search"
 
 # Custom QA Prompt Template
-QA_PROMPT_TEMPLATE = """Use the following pieces of context to answer the question at the end. 
-If you don't know the answer or if the answer is not contained in the context, just say "I don't know based on the provided documents" - don't try to make up an answer.
-Always cite the source documents when providing answers.
+QA_PROMPT_TEMPLATE = """You are a helpful AI assistant. Answer the question based on the context provided below.
 
 Context:
 {context}
 
 Question: {question}
 
-Answer with citations:"""
+Provide a clear, concise answer based on the context above. If the context doesn't contain the answer, say "I don't have enough information in the provided documents to answer that question."""
