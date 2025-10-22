@@ -90,6 +90,19 @@ class DocumentProcessor:
             pdf_file = BytesIO(file_bytes)
             pdf_reader = PyPDF2.PdfReader(pdf_file)
             metadata["pages"] = len(pdf_reader.pages)
+            # Try to capture PDF title from metadata
+            try:
+                info = getattr(pdf_reader, "metadata", None) or {}
+                title = None
+                if isinstance(info, dict):
+                    title = info.get("/Title") or info.get("Title")
+                else:
+                    # PyPDF2 sometimes exposes attributes
+                    title = getattr(info, "title", None)
+                if title and isinstance(title, str) and title.strip():
+                    metadata["doc_title"] = title.strip()
+            except Exception:
+                pass
             
             for page_num, page in enumerate(pdf_reader.pages):
                 page_text = page.extract_text()
@@ -126,6 +139,14 @@ class DocumentProcessor:
                     paragraphs.append(para.text)
             
             metadata["paragraphs"] = len(paragraphs)
+            # DOCX title if available
+            try:
+                title = getattr(doc.core_properties, "title", None)
+                if title and title.strip():
+                    metadata["doc_title"] = title.strip()
+            except Exception:
+                pass
+            
             text = "\n\n".join(paragraphs)
             
         except Exception as e:
@@ -156,6 +177,9 @@ class DocumentProcessor:
                 metadata["lines"] = len(text.split('\n'))
             except Exception as e:
                 raise ValueError(f"Error decoding text file: {str(e)}")
+        
+        # Use filename (without extension) as title fallback
+        metadata["doc_title"] = metadata.get("doc_title") or os.path.splitext("unknown.txt")[0]
         
         text = self._clean_text(text)
         return text, metadata
@@ -198,10 +222,12 @@ class DocumentProcessor:
         # Create LangChain documents with metadata
         documents = []
         for idx, chunk in enumerate(chunks):
+            title_fallback = os.path.splitext(os.path.basename(file_name))[0]
             metadata = {
                 "source": file_name,
                 "chunk_index": idx,
                 "total_chunks": len(chunks),
+                "doc_title": (doc_metadata.get("doc_title") if isinstance(doc_metadata, dict) else None) or title_fallback,
                 **doc_metadata
             }
             documents.append(LangChainDocument(page_content=chunk, metadata=metadata))

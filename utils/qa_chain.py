@@ -9,13 +9,14 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from config import GEMINI_MODEL, TEMPERATURE, QA_PROMPT_TEMPLATE, TOP_K_RESULTS
+from config import GEMINI_MODEL, TEMPERATURE, TOP_K_RESULTS
 
 
 class QAChainManager:
     """Manages QA chain operations with Gemini LLM"""
     
     def __init__(self, api_key: str):
+        
         """
         Initialize QA chain manager
         
@@ -43,41 +44,31 @@ class QAChainManager:
             raise Exception(f"Error initializing Gemini LLM: {str(e)}")
     
     def create_qa_chain(self, vector_store):
-        """
-        Create a RAG chain with custom prompt
-        
-        Args:
-            vector_store: ChromaDB vector store instance
-            
-        Returns:
-            RAG chain instance
-        """
         if vector_store is None:
-            raise ValueError("Vector store is required to create QA chain")
+            raise ValueError("Vector store is required")
         
         try:
-            # Create retriever from vector store (MMR for diversity)
-            retriever = vector_store.as_retriever(
-                search_type="mmr",
-                search_kwargs={
-                    "k": TOP_K_RESULTS,
-                    "fetch_k": max(10, TOP_K_RESULTS * 3),
-                    "lambda_mult": 0.25,
-                },
+            self.retriever = vector_store.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": TOP_K_RESULTS}
             )
             
-            # Create prompt template
-            prompt = ChatPromptTemplate.from_template(QA_PROMPT_TEMPLATE)
+            template = """Answer based on context. Be direct and concise (1-3 sentences max).
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
             
-            # Create chain: retriever -> format_docs -> prompt -> llm -> parser
+            prompt = ChatPromptTemplate.from_template(template)
+            
             def format_docs(docs):
                 return "\n\n".join(doc.page_content for doc in docs)
             
-            # Store retriever for later use
-            self.retriever = retriever
-            
             self.qa_chain = (
-                {"context": retriever | format_docs, "question": RunnablePassthrough()}
+                {"context": self.retriever | format_docs, "question": RunnablePassthrough()}
                 | prompt
                 | self.llm
                 | StrOutputParser()
@@ -104,42 +95,13 @@ class QAChainManager:
             self.create_qa_chain(vector_store)
         
         try:
-            # Get relevant documents
-            source_docs = self.retriever.get_relevant_documents(question)
-            
-            # Heuristic extractive answer for goal/objective-style questions
-            lower_q = question.lower()
-            keywords = ["goal", "objective", "purpose", "aim", "mission"]
-            extractive = None
-            if any(k in lower_q for k in keywords):
-                snippets = []
-                for doc in source_docs:
-                    lines = [l.strip() for l in doc.page_content.split('\n') if l.strip()]
-                    for i, line in enumerate(lines):
-                        llow = line.lower()
-                        if any(k in llow for k in keywords):
-                            window = " ".join(lines[max(0, i-1):min(len(lines), i+3)])
-                            snippets.append(window)
-                if snippets:
-                    # Deduplicate and compact
-                    joined = " ".join(snippets)
-                    # Keep to ~350 chars
-                    extractive = (joined[:350] + "...") if len(joined) > 350 else joined
-            
-            # Query the chain
+            source_docs = self.retriever.invoke(question)
             answer = self.qa_chain.invoke(question)
-            answer = answer.strip()
             
-            # Prefer extractive if available and concise
-            if extractive and (len(answer) < 10 or len(extractive) < len(answer) * 0.7):
-                answer = extractive
-            
-            response = {
-                "answer": answer,
+            return {
+                "answer": answer.strip(),
                 "source_documents": source_docs
             }
-            
-            return response
             
         except Exception as e:
             raise Exception(f"Error processing question: {str(e)}")
